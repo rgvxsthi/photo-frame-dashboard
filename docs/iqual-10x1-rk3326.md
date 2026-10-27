@@ -322,9 +322,34 @@ first candidate until the backup route is solved. What it would buy, and what st
    Two cautions from the first session. `fastboot getvar all` is a long sequence of getvars;
    piping it into `head` kills fastboot with SIGPIPE part-way through and **leaves fastbootd
    wedged** — afterwards `getvar` and even `fastboot reboot` hang with no response until the
-   frame is power-cycled. Capture the whole output to a file instead. And `fastboot fetch`
-   (readback of a partition) has **not** been verified: the one attempt ran after the device was
-   already wedged, so treat readback as unknown until it is tried on a fresh fastbootd session.
+   frame is power-cycled. Capture the whole output to a file instead.
+
+4. **Readback is not available in fastbootd.** `fastboot fetch misc out.img` fails at once with
+   `Unable to get max-fetch-size. Device does not support fetch command.` So fastbootd here is
+   write-only: it can flash `boot` and `vbmeta`, but it cannot hand back a backup first. What it
+   does report, captured in full:
+
+   | Variable | Value |
+   | --- | --- |
+   | `unlocked` | `yes` (`secure:yes` as well, which is the factory flash-protection flag) |
+   | `is-userspace` | `yes`, `dynamic-partition:true`, `slot-count:0` |
+   | `max-download-size` | `0x10000000` (256 MiB) |
+   | `partition-size:boot` | `0x22D6000` (36,528,128 bytes = 71,344 sectors) |
+   | `partition-size:vbmeta` | `0x100000` |
+   | `partition-size:misc` / `dtbo` / `trust` / `uboot` / `security` | `0x400000` |
+   | `partition-size:baseparameter` | `0x100000` |
+   | `partition-size:recovery` | `0x6000000` |
+   | `partition-size:super` | `0x96000000` |
+
+   The sizes match the partition table in section 4 exactly, and `fastboot reboot` returns the
+   frame to Android in ~30 s. That makes fastbootd the flashing route once a backup exists.
+
+5. **The Adups updater identifies itself as RK3566.** `ro.fota.platform=RK3566_11.0` and
+   `ro.fota.oem=incartech3566_11.0`, while the device tree, `dmesg` and `ro.board.platform` all
+   say RK3326 (`Machine model: Rockchip rk3326 863 rkisp1 board`, `SoC : 33260001`). Do not pick
+   a loader or a firmware package from those FOTA strings. The updater stages a full package at
+   `/data/media/0/incarupdate/update.zip`, but that directory does not exist on this unit, so
+   there was no cached `update.zip` to extract `boot.img` from.
 
 What is known: `boot` is `rknand0p7`, 71,344 sectors; `vbmeta` is `rknand0p6`;
 `ro.boot.dynamic_partitions=true`; `super` is p15. The Magisk patcher would also need the
@@ -335,9 +360,11 @@ Do not start a flash on this unit without a byte-counted, SHA-256-verified readb
 
 ## Open questions
 
-- Whether loader mode is reachable here at all. `adb reboot loader` left no USB device behind;
-  the untested alternative is holding the reset button (if this shell has one) at power-on, the
-  route that works on the [Uhale 102KZ](uhale-102kz.md#1-loader-mode) and the BIUFRAME.
+- Whether loader or maskrom mode is reachable here at all. `adb reboot loader` left no USB device
+  behind; `adb reboot maskrom` is untested; the other route is holding the reset button (if this
+  shell has one) at power-on, the approach used on the [Uhale 102KZ](uhale-102kz.md#1-loader-mode)
+  and the BIUFRAME. Since fastbootd cannot read back, this is the only known path to the verified
+  backup that has to exist before any flash.
 - Whether a Magisk-patched `boot` boots with dm-verity enforcing, or whether `vbmeta` must be
   patched too.
 - Whether a second computer's ADB key is accepted on this unit without toggling ADB access again.
