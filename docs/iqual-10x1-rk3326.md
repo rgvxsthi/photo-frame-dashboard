@@ -55,7 +55,7 @@ RK3126 fingerprint and refuses).
 | RAM | 991,252 kB (~968 MB), plus a 743,432 kB `zram0` swap device |
 | Storage | Logical NAND `rknand0`, 30,277,632 blocks (~28.9 GiB). `/data` is 25 GB, 496 MB used |
 | Display / density | 1280 × 800, 160 dpi |
-| Touch | `gslX680` (no separate digitizer name in the build props) |
+| Touch | `gsl3673_800x1280` on `/dev/input/event1` (`getevent -pl`), multi-touch protocol B with `ABS_MT_SLOT` 0–10. The kiosk's two-finger hold opens its menu. |
 | WebView | `com.android.webview` **113.0.5672.136** (newer than the dashboard's Chrome 106 target) |
 | Frameo | `net.frameo.frame` v1.32.16 (an updated system app; the factory copy is v1.30.19) |
 | Vendor apps | `com.incar.update` 5.28 (Adups FOTA, `PERSISTENT`), `com.DeviceTest` |
@@ -537,5 +537,6 @@ Do not start a flash on this unit without a byte-counted, SHA-256-verified readb
   patched too.
 - Whether a second computer's ADB key is accepted on this unit without toggling ADB access again.
 - What Adups actually contacts when it is left enabled; only the APK was inspected, not traffic.
-- Whether the `gslX680` touch controller reads two fingers reliably through the kiosk's
-  two-finger menu gesture on this panel (not yet exercised by hand).
+  Disabled, it still runs (`PERSISTENT`) and crashes on every connectivity change, because its
+  `SystemActionService` is disabled with the package: 26 crashes in the first two minutes after a
+  power cycle, none while the network is stable.
