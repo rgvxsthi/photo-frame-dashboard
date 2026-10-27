@@ -6,7 +6,8 @@ addresses, SSIDs) are left out.
 
 **Result:** ADB over USB from Frameo's own Beta Program switch, **no root**, the repo's
 [kiosk app](../dashboard/kiosk/README.md) set as HOME on a Home Assistant dashboard, the Adups
-updater and the factory test app disabled, Frameo disabled, and the time zone corrected. No
+updater and the factory test app disabled, Frameo disabled, the time zone corrected, and a
+rootless speed pass that took the kiosk from ~140% CPU to ~7% ([Performance](#performance)). No
 partition was written, no `/system` file was touched. The Magisk route is an open question at
 the end.
 
@@ -59,7 +60,7 @@ RK3126 fingerprint and refuses).
 | Frameo | `net.frameo.frame` v1.32.16 (an updated system app; the factory copy is v1.30.19) |
 | Vendor apps | `com.incar.update` 5.28 (Adups FOTA, `PERSISTENT`), `com.DeviceTest` |
 | Frameo location | `/system/priv-app/Frameo`, privileged system app, `UPDATED_SYSTEM_APP` (factory copy v1.30.19, updated copy v1.32.16) |
-| SystemUI | `com.android.systemui` is **disabled on this unit out of the box** |
+| SystemUI | `com.android.systemui` is **disabled on this unit out of the box** (`enabled=2`), but it is `PERSISTENT`, so its process still runs (~84 MB RSS) and draws nothing |
 | Bootloader | `ro.boot.flash.locked=0`, `ro.boot.verifiedbootstate=orange`, `ro.boot.veritymode=enforcing`, `ro.boot.dynamic_partitions=true`, `ro.boot.storagemedia=nand` |
 | Time zone | Ships as `America/New_York` |
 | Trust store | ISRG Root X1 present (`6187b673.0`); ISRG Root X2 absent |
@@ -240,6 +241,74 @@ Every item is reversible from ADB. Nothing on a read-only filesystem was modifie
 | Factory test app disabled | `pm disable-user --user 0 com.DeviceTest` | `pm enable com.DeviceTest` |
 | Frameo disabled | `pm disable-user --user 0 net.frameo.frame` | `pm enable net.frameo.frame` (then set it HOME again if wanted) |
 | Time zone corrected | `setprop persist.sys.timezone Australia/Sydney` (see below) | `setprop persist.sys.timezone America/New_York` |
+| Animations off (also turns on `prefers-reduced-motion` in WebView; see [Performance](#performance)) | `settings put global window_animation_scale 0`, same for `transition_animation_scale` and `animator_duration_scale` | set all three back to `0.5` |
+| Hot apps AOT-compiled | `cmd package compile -m speed -f <pkg>` for `com.android.webview`, `com.google.android.inputmethod.latin`, `com.android.settings`, `com.android.permissioncontroller`, `amirz.rootless.nexuslauncher` | `cmd package compile --reset <pkg>` |
+| Unused system apps disabled | `pm disable-user --user 0 <pkg>` for each package in the list below | `pm enable <pkg>` |
+| Cached background processes capped at 8 | `settings put global activity_manager_constants max_cached_processes=8` | `settings delete global activity_manager_constants` |
+| BLE "always scanning" off | `settings put global ble_scan_always_enabled 0` (it was unset; Wi-Fi scan-always was already `0`) | `settings delete global ble_scan_always_enabled` |
+
+The packages disabled for speed, all checked unused by a Wi-Fi-only kiosk:
+`com.android.traceur`, `com.android.managedprovisioning`, `com.android.dynsystem`,
+`com.android.localtransport` (these four were running after boot), `com.android.bluetooth`,
+`com.android.bluetoothmidiservice`, `com.android.bips`,
+`com.android.printservice.recommendation`, `com.android.musicfx`, `com.android.soundrecorder`,
+`android.rk.RockVideoPlayer`, `com.android.egg`, `com.android.cellbroadcastreceiver`,
+`com.android.wallpaperbackup`, `com.android.wallpapercropper`, `com.android.bookmarkprovider`,
+`com.android.htmlviewer`, `com.android.companiondevicemanager`,
+`com.android.hotspot2.osulogin`, `com.android.simappdialog`, `com.android.statementservice`,
+`com.android.sharedstoragebackup`, `com.android.backupconfirm`, `com.android.storagemanager`.
+Left alone on purpose: `com.android.phone` and `providers.telephony` (system services bind to
+them even without a modem), `packageinstaller`, `permissioncontroller`, `externalstorage`,
+`providers.*`, `networkstack*`, `captiveportallogin`, `wallpaperpicker`, Gboard, Settings and
+SystemUI. All 29 disabled packages held across a reboot, and Wi-Fi reconnected.
+
+### Performance
+
+The CPU and GPU are already at their top clocks under load, so this frame cannot be made
+faster by clocking. Measured over ADB on 2026-10-27 with the `solar-app` HA panel loaded:
+
+| | Before | After |
+| --- | --- | --- |
+| `com.wesbos.homehq` CPU (kiosk + WebView GPU raster) | 120–145% | ~7% |
+| WebView renderer CPU | 30–57% | ~7% |
+| Load average | ~5–6 | ~1.7 |
+| `MemAvailable` | ~370 MB | ~425 MB |
+| App (`u0_*`) processes | 20 | 12 |
+| Settings, cold `am start -W` | first draw +18 s (section 6) | 2.5–3.2 s |
+| Power-on to kiosk process | n/a | ~25 s after `adb reboot`; `boot_completed` at 54 s |
+
+Measured with `top` and `/proc/loadavg`, figures rounded.
+
+**Most of the dashboard gain came from turning animations off, not from the debloat.** A
+DevTools profile of the panel (kiosk launched with `--ez debug true`, then
+`adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>`) showed the main thread busy
+58% of the time at ~9 fps. JavaScript accounted for only ~12% of it; the rest was native
+paint and raster, driven by the card's SVG SMIL animations (`<animateMotion>` flow dots,
+`<animateTransform>`) and `backdrop-filter: blur`. The card turns those off under
+`prefers-reduced-motion: reduce`, and WebView reports that preference when
+`animator_duration_scale` is `0`. **WebView only reads the setting when it starts, so restart the
+kiosk or reboot after changing it.** Any dashboard shown on this frame should keep its motion
+behind `prefers-reduced-motion`, avoid `backdrop-filter`, and avoid always-on SVG animation; a
+4× Cortex-A35 cannot raster those at 1280 × 800 without saturating.
+
+Also seen: HA serves this WebView (Chrome 113) its legacy `frontend_es5` bundle, which is
+slower than the modern build. The system WebView cannot be replaced without root:
+`dumpsys webviewupdate` lists only `com.android.webview` as a provider, and the copy in
+`/product/app/webview` is signed by a vendor key (`O=Micro-Star, OU=Research Center`,
+SHA-256 `16af60cf…0d749`). WebView 113 already runs GPU rasterization, GPU compositing and OOP
+canvas on the Mali-G31, so WebView flags have nothing left to enable.
+
+Cromite System WebView 153.0.8010.37 (`arm64_SystemWebView.apk`, which also carries
+`armeabi-v7a` libraries; package `com.android.webview`, signer `CN=CromiteOrg`) was tried on
+2026-10-27. `adb install -r` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE: … signatures do not
+match`, and still fails the same way after `pm uninstall -k --user 0 com.android.webview`,
+because the system package keeps its signature. Undo that step with
+`cmd package install-existing com.android.webview`. The WebView keeps its `speed` dexopt state
+after that.
+
+`com.incar.update` and SystemUI are `PERSISTENT`, so `pm disable-user` does not keep their
+processes down: `am force-stop com.incar.update` is followed by an immediate restart. Stopping
+them for good needs root.
 
 ### The way back on the panel
 
@@ -338,6 +407,15 @@ first candidate until the backup route is solved. What it would buy, and what st
    boot-time hook that does not depend on the kiosk starting, the ability to set the clock and
    URL without an app, and a shell that can read the NAND. None of those is needed for the
    dashboard.
+
+   **For speed, root's usual levers are already used up** (see [Performance](#performance)). The
+   `interactive` governor already holds all four cores at their 1512 MHz top under load, and the
+   Mali GPU sits at its 520 MHz top, so switching to the `performance` governor gains nothing.
+   Overclocking would mean a modified device tree in `boot`. Root would still buy three
+   things: keeping the `PERSISTENT` updater and SystemUI processes down (~175 MB RSS between
+   them), a newer WebView via a Magisk module so HA serves its modern bundle instead of
+   `frontend_es5`, and zram and LMK tuning. Every one of those needs the stock `boot.img`
+   first, and there is still no way to read it (items 1–4 below).
 
 1. **No verified backup route yet.** The bootloader reports
    `flash.locked=0` / `verifiedbootstate=orange`, which usually means an unlocked Rockchip
