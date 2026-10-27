@@ -245,6 +245,7 @@ Every item is reversible from ADB. Nothing on a read-only filesystem was modifie
 | Hot apps AOT-compiled | `cmd package compile -m speed -f <pkg>` for `com.android.webview`, `com.google.android.inputmethod.latin`, `com.android.settings`, `com.android.permissioncontroller`, `amirz.rootless.nexuslauncher` | `cmd package compile --reset <pkg>` |
 | Unused system apps disabled | `pm disable-user --user 0 <pkg>` for each package in the list below | `pm enable <pkg>` |
 | Cached background processes capped at 8 | `settings put global activity_manager_constants max_cached_processes=8` | `settings delete global activity_manager_constants` |
+| Kiosk JavaScript bridge on (the dashboard sets the backlight; see [Screen control](#screen-control)) | `am start -n com.wesbos.homehq/.MainActivity --ez bridge true` | `--ez bridge false` |
 | BLE "always scanning" off | `settings put global ble_scan_always_enabled 0` (it was unset; Wi-Fi scan-always was already `0`) | `settings delete global ble_scan_always_enabled` |
 
 The packages disabled for speed, all checked unused by a Wi-Fi-only kiosk:
@@ -309,6 +310,31 @@ after that.
 `com.incar.update` and SystemUI are `PERSISTENT`, so `pm disable-user` does not keep their
 processes down: `am force-stop com.incar.update` is followed by an immediate restart. Stopping
 them for good needs root.
+
+### Screen control
+
+The panel ships at brightness 217/255 with `screen_off_timeout` at its maximum, so it stays bright
+all night. Two rootless controls, both checked on 2026-10-27:
+
+- **The dashboard dims it** through the kiosk's opt-in bridge (`--ez bridge true`,
+  [kiosk README](../dashboard/kiosk/README.md#let-the-dashboard-dim-the-screen)).
+  `HomeHQ.setBrightness(0.02)` showed up as `mScreenBrightnessOverrideFromWindowManager=0.02` in
+  `dumpsys power`, and `-1` cleared it to `NaN`. A call from `https://example.com/`, loaded in the
+  same WebView, changed nothing.
+- **ADB turns it off.** `input keyevent KEYCODE_SLEEP` takes `/sys/class/backlight/backlight/brightness`
+  to 0 (`bl_power=4`), and `KEYCODE_WAKEUP` brings the kiosk straight back. With
+  `sys.bootanim.exit=1` already set, waking does **not** bring the Frameo splash back
+  (`init.svc.bootanim` stays `stopped`, no `BootAnimation` layer). That's unlike the stuck
+  animation in section 6, where a sleep and wake restarted it.
+
+Brightness 0 is not off on this panel: the lowest setting drives the backlight at 10/255. Use
+sleep for off. **Set brightness through `screen_brightness_float` (0.0–1.0), not the integer
+`screen_brightness`.** After `settings put system screen_brightness 0`, putting the integer back
+to 217 left the backlight at 10, because the float setting stayed at the minimum.
+`settings put system screen_brightness_float 0.851` restored it, and the integer followed.
+
+A system brightness set over ADB only shows while the dashboard's override is `-1`. When the
+page has set its own level, that level wins until the page hands it back.
 
 ### The way back on the panel
 
