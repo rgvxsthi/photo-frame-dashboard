@@ -336,6 +336,14 @@ to 217 left the backlight at 10, because the float setting stayed at the minimum
 A system brightness set over ADB only shows while the dashboard's override is `-1`. When the
 page has set its own level, that level wins until the page hands it back.
 
+**Home Assistant over ADB.** This frame can't approve a new ADB key, so give Home Assistant a key
+it already trusts. Copy the host's `~/.android/adbkey` and `adbkey.pub` to
+`/config/.storage/androidtv_adbkey` and `androidtv_adbkey.pub` (the Android Debug Bridge
+integration's default key path; modes 600 and 644). From a Docker install, `adb_shell` 0.4.4
+inside the container connected to `<frame-ip>:5555` with that key and ran shell commands, with
+nothing shown on the frame. That key now also lives on the HA host, so anything with
+access to HA's config can reach a shell on the frame. Remove both files to revoke it.
+
 ### The way back on the panel
 
 SystemUI being disabled does not break Settings. `am start -a android.settings.SETTINGS` reaches
