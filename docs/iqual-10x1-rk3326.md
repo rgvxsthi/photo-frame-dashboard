@@ -98,6 +98,15 @@ su: invalid uid/gid '-c'
 `ro.debuggable=0`, `ro.secure=1`, so `adb root` is not available either. The `sunxi`-style
 "shipped root" route from the RK3126 frames does not apply.
 
+The setuid bit is set and `/` is **not** mounted `nosuid`
+(`/dev/block/dm-0 on / type ext4 (ro,dirsync,seclabel,nodev,relatime)`), so the failure is not a
+mount option. What is measurable: `NoNewPrivs: 0`, the adb shell's capability bounding set is
+only `CapBnd: 00000000000000c0` (`CAP_SETUID|CAP_SETGID`), app processes get the full set, and
+`/system/bin/run-as` here has **no** setuid bit (`-rwxr-x--- root shell`). That points at the
+adbd shell's `SECBIT_NOROOT`: `su` runs with `euid 0` but no capabilities, so its `setgid(0)`
+gets `EPERM`. Whatever the exact cause, treat the shipped `su` as unusable and do not spend time
+on it; a root shell needs a patched `boot`, not this binary.
+
 **SELinux is `Permissive` on this unit** (`getenforce` prints `Permissive`), which is why the
 `shell` user can write persistent properties here:
 `setprop persist.sys.timezone …` and `setprop sys.bootanim.exit 1` both take effect. That is not
@@ -294,6 +303,28 @@ first candidate until the backup route is solved. What it would buy, and what st
    either this build enters loader mode without a USB gadget, or it powered down. `rkdeveloptool
    ld` saw nothing, so no loader-mode read was possible; a reset-pinhole cold start into loader
    mode is the untested alternative.
+
+   `adb reboot recovery` **does** reach the AOSP recovery menu, and recovery's USB is alive:
+   the frame enumerates as `18d1:d001` and `adb devices` lists it as `unauthorized`. Recovery
+   runs adbd, but it reads its trusted keys from `/data/misc/adb/adb_keys`, and recovery does not
+   mount `/data` on an encrypted device, so the host key that Android already accepts is out of
+   reach. There is no prompt to accept a new key in recovery, so this is not a shell route. The
+   menu does offer *Mount /system*; that does not expose `adb_keys`. The useful part is that the
+   kernel USB gadget works outside Android, which is what fastbootd needs.
+
+3. **`adb reboot fastboot` reaches fastbootd**, and that is the first usable non-Android mode on
+   this unit. `fastboot devices` lists the frame within ~15 s, `lsusb` shows the fastbootd
+   gadget (`18d1:4ee0`), and `fastboot getvar all` answers with `is-userspace:yes`,
+   `dynamic-partition:true`, `partition-type:*:raw` for `boot`, `vbmeta`, `misc`, `uboot`,
+   `trust`, `dtbo`, `recovery`, `baseparameter`, `super`, and logical `system`/`vendor`/... So a
+   flash of `boot` and `vbmeta` is possible in principle, without loader mode.
+
+   Two cautions from the first session. `fastboot getvar all` is a long sequence of getvars;
+   piping it into `head` kills fastboot with SIGPIPE part-way through and **leaves fastbootd
+   wedged** — afterwards `getvar` and even `fastboot reboot` hang with no response until the
+   frame is power-cycled. Capture the whole output to a file instead. And `fastboot fetch`
+   (readback of a partition) has **not** been verified: the one attempt ran after the device was
+   already wedged, so treat readback as unknown until it is tried on a fresh fastbootd session.
 
 What is known: `boot` is `rknand0p7`, 71,344 sectors; `vbmeta` is `rknand0p6`;
 `ro.boot.dynamic_partitions=true`; `super` is p15. The Magisk patcher would also need the
