@@ -285,9 +285,15 @@ first candidate until the backup route is solved. What it would buy, and what st
    `flash.locked=0` / `verifiedbootstate=orange`, which usually means an unlocked Rockchip
    loader, but `ro.boot.veritymode=enforcing` means a patched `boot` alone may not boot. The
    shell user cannot read any block device, so the stock `boot.img` has to come from loader mode
-   (`2207:310b`-class USB ID) with `rkdeveloptool`/`upgrade_tool`, which is not installed here.
+   (`2207:310b`-class USB ID) with `rkdeveloptool`/`upgrade_tool`. `rkdeveloptool` builds cleanly
+   from source on this host with the distro `gcc`, `make` and `libusb-1.0`; nothing else is needed.
 2. **`adb reboot bootloader` is untested**, and whether this unit's U-Boot exposes fastboot at
    all is unknown. `fastboot` on the host is available; the frame's behaviour is not.
+   `adb reboot loader` **was** tried: the frame dropped off USB within 3 s and presented no
+   `2207:` or `18d1:` device for the next 80 s. It came back only after a DC power cycle. So
+   either this build enters loader mode without a USB gadget, or it powered down. `rkdeveloptool
+   ld` saw nothing, so no loader-mode read was possible; a reset-pinhole cold start into loader
+   mode is the untested alternative.
 
 What is known: `boot` is `rknand0p7`, 71,344 sectors; `vbmeta` is `rknand0p6`;
 `ro.boot.dynamic_partitions=true`; `super` is p15. The Magisk patcher would also need the
@@ -298,8 +304,9 @@ Do not start a flash on this unit without a byte-counted, SHA-256-verified readb
 
 ## Open questions
 
-- Whether loader mode is reachable here without opening the case (reset pinhole at power-on, or
-  via the Adups app's reboot-to-recovery path), and which USB ID it presents.
+- Whether loader mode is reachable here at all. `adb reboot loader` left no USB device behind;
+  the untested alternative is holding the reset button (if this shell has one) at power-on, the
+  route that works on the [Uhale 102KZ](uhale-102kz.md#1-loader-mode) and the BIUFRAME.
 - Whether a Magisk-patched `boot` boots with dm-verity enforcing, or whether `vbmeta` must be
   patched too.
 - Whether a second computer's ADB key is accepted on this unit without toggling ADB access again.
