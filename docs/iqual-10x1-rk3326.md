@@ -10,10 +10,12 @@ updater and the factory test app disabled, Frameo disabled, and the time zone co
 partition was written, no `/system` file was touched. The Magisk route is an open question at
 the end.
 
-**One caveat that comes with Frameo being disabled:** on this build the Frameo boot animation
-runs above every window after a power cut, and only `adb shell setprop sys.bootanim.exit 1` (or
-Frameo drawing its own UI) dismisses it. The kiosk is running underneath the whole time. Until
-root exists, keep a computer with ADB within reach for the first boot after a power cut. See
+**The Frameo boot animation is handled by the kiosk, without root.** On this build the Frameo
+animation runs above every window after a power cut, so the panel shows the splash while the
+kiosk runs underneath. The kiosk's new `bootanim_exit` opt-in sets `sys.bootanim.exit` on every
+start, and SELinux being permissive is what lets an ordinary app do that. Verified on a cold DC
+power cycle: the splash cleared and the dashboard loaded with nothing attached. See
+[the kiosk section](#5-dashboard-kiosk) and
 [Frameo owns the Wi-Fi config and the boot video](#frameo-owns-the-wi-fi-config-and-the-boot-video).
 
 **This is not the YIAISIGN `10X1` from [yiaisign-10x1.md](yiaisign-10x1.md).** That frame is an
@@ -84,6 +86,25 @@ kiosk gets a clean fullscreen with no status or navigation bar. The clock screen
 Cable notes: USB-C to USB-C did not enumerate on the Linux host. A USB-A to USB-C data cable
 worked at once, same as the other Rockchip frames here.
 
+### ADB over Wi-Fi
+
+The frame's Developer options are not reachable (SystemUI is disabled), so Android 11's
+Wireless debugging toggle and its pairing code are off the table. The older switch works and
+survives reboots:
+
+```sh
+adb shell setprop persist.adb.tcp.port 5555
+```
+
+`persist.adb.tcp.port` is read by adbd at start, so after the next boot the frame listens on
+5555 **and** keeps USB ADB working; both transports appear in `adb devices` at once. Because
+`ro.adb.secure=1`, the listener still requires a key that this frame already trusts, so a
+stranger on the LAN cannot connect just by finding the port. It is a plain, unencrypted
+listener on every interface, though: treat it as a convenience on a trusted network, and clear
+it (`setprop persist.adb.tcp.port ""`) if the frame moves to a shared one. With two devices
+listed, `adb -s <ip>:5555 shell …` is needed, because plain `adb shell` fails with "more than
+one device".
+
 ## 3. Root status: `su` exists but does not work
 
 `/system/xbin/su` is `-rwsr-sr-x root shell`, 6,244 bytes, dated 2026-05-31. Every form fails:
@@ -150,9 +171,13 @@ Temurin JDK 17, Android build-tools 34.0.0, platform 34, plus a `zip` shim on `P
 
 ```sh
 adb install -r kiosk/build/homehq.apk
-adb shell am start -n com.wesbos.homehq/.MainActivity --ez home true --es url <dashboard-url>
+adb shell am start -n com.wesbos.homehq/.MainActivity --ez home true \
+  --ez bootanim_exit true --es url <dashboard-url>
 adb shell cmd package set-home-activity com.wesbos.homehq/.Home
 ```
+
+`--ez bootanim_exit true` is explained below; it is what keeps the Frameo splash off the
+screen after a power cut on this frame.
 
 `set-home-activity` printed `Success` **while Frameo was still enabled**, unlike the second
 `102k` unit, where it failed until Frameo was disabled. `am start` saved the URL and
@@ -160,6 +185,23 @@ adb shell cmd package set-home-activity com.wesbos.homehq/.Home
 
 `am start` with a running kiosk reports `Warning: Activity not started, intent has been
 delivered to currently running top-most instance.` The URL is still saved.
+
+### Clearing the vendor boot animation without root
+
+This frame's boot animation does not stop on its own once Frameo is disabled (section 6), and
+`sys.bootanim.exit` is the same property that `adb shell setprop sys.bootanim.exit 1` sets by
+hand. The kiosk can set it itself, at every start, which is what makes the frame survive a power
+cut with no computer attached:
+
+```sh
+adb shell am start -n com.wesbos.homehq/.MainActivity --ez bootanim_exit true
+```
+
+The opt-in is saved and retried once, 5 s after launch. It needs no root **because SELinux is
+permissive here**, so the property service accepts a write from an app uid; where SELinux is
+enforcing the same call is refused, logs a warning, and changes nothing. Verified on a cold DC
+power cycle: the log shows `HomeHQ: Boot animation exit on`, `sys.bootanim.exit` goes from unset
+to `1`, `init.svc.bootanim` goes to `stopped`, and the dashboard loads without any ADB command.
 
 ### Serving a Home Assistant dashboard
 
@@ -264,8 +306,13 @@ for a broken frame:
 
    ...or letting Frameo draw its own UI, which is what happens on the factory configuration.
    So "Frameo disabled" and "kiosk as Home" cannot both be in effect at boot on this unit without
-   something to set that property. Until root exists (section 7), a power cut leaves the frame
-   on the Frameo splash with the kiosk running underneath, and clearing it needs a computer:
+   something to set that property.
+
+   **The kiosk now sets it itself**, through its `bootanim_exit` opt-in (section 5). Because
+   SELinux is permissive, an ordinary app can write this property here; the kiosk does it on
+   every start, and a cold DC power cycle confirmed the splash clears and the dashboard loads
+   with nothing attached. No root is involved. The manual command stays as the fallback if the
+   kiosk is not running:
 
    ```sh
    adb shell setprop sys.bootanim.exit 1
@@ -285,10 +332,12 @@ for a broken frame:
 Not attempted. Root here would mean a Magisk-patched `boot` image on NAND, and this build is a bad
 first candidate until the backup route is solved. What it would buy, and what stands in the way:
 
-0. **What root would buy.** With Magisk, a late-start service script could set
-   `sys.bootanim.exit 1` after every boot, so the frame would survive a power cut with no
-   computer attached, and it could also keep the clock and the kiosk URL under control. That is
-   the main reason to want it: the dashboard itself needs no root.
+0. **What root would buy.** Less than it did before this session. The original reason was a
+   late-start service script that sets `sys.bootanim.exit 1` after every boot; the kiosk now does
+   that itself without root (section 5). What is left is convenience and belt-and-braces: a
+   boot-time hook that does not depend on the kiosk starting, the ability to set the clock and
+   URL without an app, and a shell that can read the NAND. None of those is needed for the
+   dashboard.
 
 1. **No verified backup route yet.** The bootloader reports
    `flash.locked=0` / `verifiedbootstate=orange`, which usually means an unlocked Rockchip
@@ -301,8 +350,14 @@ first candidate until the backup route is solved. What it would buy, and what st
    `adb reboot loader` **was** tried: the frame dropped off USB within 3 s and presented no
    `2207:` or `18d1:` device for the next 80 s. It came back only after a DC power cycle. So
    either this build enters loader mode without a USB gadget, or it powered down. `rkdeveloptool
-   ld` saw nothing, so no loader-mode read was possible; a reset-pinhole cold start into loader
-   mode is the untested alternative.
+   ld` saw nothing, so no loader-mode read was possible.
+
+   **The reset pinhole is the recovery key, not a maskrom strap.** Holding it while power is
+   applied boots the AOSP recovery menu (section 7, next paragraph); it does not present a
+   Rockchip USB device, and the menu has no maskrom entry. With `adb reboot loader` and
+   `adb reboot maskrom` both ignored, the software routes and the one accessible hardware route
+   are exhausted. What is left is opening the frame to find a maskrom button or test point, with
+   the usual risk of shorting the wrong pad on NAND.
 
    `adb reboot recovery` **does** reach the AOSP recovery menu, and recovery's USB is alive:
    the frame enumerates as `18d1:d001` and `adb devices` lists it as `unauthorized`. Recovery
@@ -360,12 +415,12 @@ Do not start a flash on this unit without a byte-counted, SHA-256-verified readb
 
 ## Open questions
 
-- Whether **maskrom** is reachable. `adb reboot loader` dropped the frame off USB and
-  `adb reboot maskrom` was ignored outright (it booted straight back to Android), so neither
-  reboot reason is honoured. That leaves the physical route: hold the reset button (if this shell
-  has one) at power-on, as on the [Uhale 102KZ](uhale-102kz.md#1-loader-mode) and the BIUFRAME.
-  Since fastbootd cannot read back, this is the only known path to the verified backup that has
-  to exist before any flash.
+- Whether **maskrom** is reachable at all. `adb reboot loader` dropped the frame off USB,
+  `adb reboot maskrom` was ignored (straight back to Android), and the reset pinhole boots
+  recovery rather than a Rockchip mode. Only a maskrom button or test point inside the shell is
+  left, and that is the only path to the verified backup that would have to exist before a
+  Magisk flash. Since the kiosk now clears the boot splash on its own, nothing is blocked by
+  this any more; it matters only if root is wanted for its own sake.
 - Whether a Magisk-patched `boot` boots with dm-verity enforcing, or whether `vbmeta` must be
   patched too.
 - Whether a second computer's ADB key is accepted on this unit without toggling ADB access again.

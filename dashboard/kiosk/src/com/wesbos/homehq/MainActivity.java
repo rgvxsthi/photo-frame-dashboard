@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
   static final String PREFS = "kiosk";
   static final String PREF_URL = "url";
   static final String PREF_MENU_BUTTON = "menu_button";
+  static final String PREF_BOOTANIM_EXIT = "bootanim_exit";
   static final long EXIT_HOLD_MS = 1500;
   static final int CANCEL_POINTER_IDS = 10; // touch ids 0-9
   static final long RETRY_MS = 5000;
@@ -178,6 +179,7 @@ public class MainActivity extends Activity {
     super.onCreate(state);
     applyDebugFlag(getIntent());
     applyHomeFlag(getIntent());
+    applyBootanimFlag(getIntent());
     keepNavigationEnabled();
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         | WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -324,6 +326,7 @@ public class MainActivity extends Activity {
     applyDebugFlag(intent);
     applyHomeFlag(intent);
     applyMenuButtonFlag(intent);
+    applyBootanimFlag(intent);
     String url = urlFrom(intent);
     if (url != null) {
       closePortal();
@@ -743,6 +746,47 @@ public class MainActivity extends Activity {
     }
     menuButton.setVisibility(getSharedPreferences(PREFS, MODE_PRIVATE)
         .getBoolean(PREF_MENU_BUTTON, false) ? View.VISIBLE : View.GONE);
+  }
+
+  /**
+   * A saved opt-in for frames whose vendor boot animation keeps covering the kiosk after a power
+   * cut. sys.bootanim.exit is a per-boot property, so it has to be set again on every start. It
+   * works without root only where SELinux is permissive or the app runs as system; where it is
+   * refused, setprop fails, the failure is logged and nothing else changes.
+   */
+  private void applyBootanimFlag(Intent intent) {
+    if (intent != null && intent.hasExtra(PREF_BOOTANIM_EXIT)) {
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+          .putBoolean(PREF_BOOTANIM_EXIT, intent.getBooleanExtra(PREF_BOOTANIM_EXIT, false)).apply();
+    }
+    boolean enabled = getSharedPreferences(PREFS, MODE_PRIVATE)
+        .getBoolean(PREF_BOOTANIM_EXIT, false);
+    Log.i(TAG, "Boot animation exit " + (enabled ? "on" : "off"));
+    if (!enabled) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        // The property service may not be ready at the first start after a power cut, so try
+        // twice. Both attempts are cheap and setting it when the animation is already gone is
+        // harmless.
+        for (int attempt = 0; attempt < 2; attempt++) {
+          try {
+            Process p = Runtime.getRuntime().exec(
+                new String[] {"/system/bin/setprop", "sys.bootanim.exit", "1"});
+            int rc = p.waitFor();
+            if (rc != 0) Log.w(TAG, "setprop sys.bootanim.exit exited " + rc);
+          } catch (IOException | InterruptedException e) {
+            Log.w(TAG, "Could not set sys.bootanim.exit: " + e);
+            return;
+          }
+          try {
+            Thread.sleep(RETRY_MS);
+          } catch (InterruptedException e) {
+            return;
+          }
+        }
+      }
+    }, "bootanim-exit").start();
   }
 
   /** Turns the Home alias on or off. The shell can't enable a component of a release app. */
