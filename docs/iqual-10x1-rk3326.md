@@ -360,11 +360,12 @@ Do not start a flash on this unit without a byte-counted, SHA-256-verified readb
 
 ## Open questions
 
-- Whether loader or maskrom mode is reachable here at all. `adb reboot loader` left no USB device
-  behind; `adb reboot maskrom` is untested; the other route is holding the reset button (if this
-  shell has one) at power-on, the approach used on the [Uhale 102KZ](uhale-102kz.md#1-loader-mode)
-  and the BIUFRAME. Since fastbootd cannot read back, this is the only known path to the verified
-  backup that has to exist before any flash.
+- Whether **maskrom** is reachable. `adb reboot loader` dropped the frame off USB and
+  `adb reboot maskrom` was ignored outright (it booted straight back to Android), so neither
+  reboot reason is honoured. That leaves the physical route: hold the reset button (if this shell
+  has one) at power-on, as on the [Uhale 102KZ](uhale-102kz.md#1-loader-mode) and the BIUFRAME.
+  Since fastbootd cannot read back, this is the only known path to the verified backup that has
+  to exist before any flash.
 - Whether a Magisk-patched `boot` boots with dm-verity enforcing, or whether `vbmeta` must be
   patched too.
 - Whether a second computer's ADB key is accepted on this unit without toggling ADB access again.
